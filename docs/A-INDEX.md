@@ -24,6 +24,7 @@ Master navigation and reading guide for the School Management System documentati
 | [11-Roadmap.md](11-Roadmap.md) | Phased feature plan from foundation to production readiness |
 | [12-BusinessRules.md](12-BusinessRules.md) | Operational, academic, and financial rules for the school management system |
 | [13-ProjectStatus.md](13-ProjectStatus.md) | Current implementation status, locked decisions, immediate next actions |
+| [14-Phase2Issues.md](14-Phase2Issues.md) | Atomic GitHub issues for Phase 2 (DevOps, Core skeleton, Users module, CI/CD) |
 
 ---
 
@@ -63,7 +64,7 @@ The canonical technical specification lives at [docs/spec.md](../../docs/spec.md
 
 ## Conventions
 
-- Files prefixed `A`/`B`/`C` are navigation aids. Files prefixed `01`–`13` are the numbered reference set.
+- Files prefixed `A`/`B`/`C` are navigation aids. Files prefixed `01`–`14` are the numbered reference set.
 - Every file opens with a one-line purpose statement and a **See also** block.
 - `TBD` means "design not yet settled." `Not yet implemented` means "design settled, code not written yet."
 - Dates use `YYYY-MM-DD`.
