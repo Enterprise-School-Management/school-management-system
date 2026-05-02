@@ -47,6 +47,7 @@ Rules:
 
 ### Added
 - Documentation scaffolding in `.claude/docs/` — sixteen files covering architecture, domain, API, database, security, testing, development, deployment, training, business rules, roadmap, project status, changelog, quick reference, glossary, and index.
+- `14-Phase2Issues.md` — 17 atomic GitHub issues for Phase 2 covering Docker/dev environment, base Django project structure, Users module, and CI/CD scaffold.
 
 ---
 
