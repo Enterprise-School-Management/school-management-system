@@ -15,15 +15,58 @@ Entities, properties, enums, relationships, and state machines for every domain 
 
 ---
 
+## Module — Schools
+
+The **foundational module**. Schools is the root of the multi-tenant model. Every other module's data is scoped to a school via `school_id`. Schools owns school lifecycle, configuration, module activation flags, and TenantContext resolution.
+
+### Entities
+
+| Entity | Key Properties | Notes |
+|--------|----------------|-------|
+| **School** *(root)* | `name`, `short_code`, `address`, `timezone`, `locale`, `contact_email`, `contact_phone`, `logo_ref?`, `subscription_tier`, `is_active`, `registered_at` | Top-level tenant. Does not carry `school_id`. `short_code` is a unique URL slug used for subdomain resolution. |
+| **SchoolConfig** | `school_id`, `key`, `value` | Key-value store for per-school settings (e.g. grading scale, academic calendar, ZIMRA fiscal number). |
+| **FeatureFlag** | `school_id`, `module_code`, `is_enabled` | Plugin activation per school. Owned by Schools; read by all other modules. |
+
+> `FeatureFlag` is promoted from Cross-Cutting Entities to Schools — Schools is its natural owner because module activation is a school administration decision.
+
+### Enums
+
+- `SubscriptionTier`: `free`, `standard`, `premium`.
+- `ModuleCode`: `schools`, `users`, `courses`, `enrolments`, `assessments`, `billing`, `analytics`, `notifications`. Matches the module set in [01-Architecture.md §5](01-Architecture.md).
+
+### Relationships
+
+- `School` 1..* `FeatureFlag` (one flag record per activated module)
+- `School` 1..* `SchoolConfig`
+- All other modules reference `School` via `school_id` FK; they never embed a `School` object.
+
+### School Creation Policy
+
+| Actor | Capability |
+|-------|------------|
+| **Superadmin** | Create, activate, deactivate, and delete any school. |
+| **Self-registration** | A public `/schools/register` endpoint is available when the global config flag `ALLOW_SCHOOL_SELF_REGISTRATION` is `true` (default: `false`). A self-registered school starts in `is_active = false`; a superadmin must approve it before users can log in. |
+
+### Events Emitted
+
+| Event | Payload | Subscribers |
+|-------|---------|-------------|
+| `school.created` | `school_id`, `name`, `tier` | Users (seed roles), Notifications (welcome message) |
+| `school.activated` | `school_id` | All modules (enable access) |
+| `school.deactivated` | `school_id`, `reason` | All modules (suspend access), Notifications (alert admin) |
+| `school.module_toggled` | `school_id`, `module_code`, `is_enabled` | Billing (reprice), Users (recompute permissions) |
+| `school.subscription_changed` | `school_id`, `old_tier`, `new_tier` | Billing (adjust plan) |
+
+---
+
 ## Module — Users
 
 ### Entities
 
 | Entity | Key Properties | Notes |
 |--------|----------------|-------|
-| **School** *(root)* | `name`, `short_code`, `address`, `timezone`, `active_modules[]` | Top-level tenant. Does not carry `school_id`. |
 | **User** *(root)* | `email`, `password_hash`, `full_name`, `phone`, `is_active`, `last_login_at` | Global identity. A user may belong to multiple schools via SchoolMembership. |
-| **SchoolMembership** | `user_id`, `school_id`, `role`, `started_at`, `ended_at?` | Binds a User to a School with a Role. |
+| **SchoolMembership** | `user_id`, `school_id`, `role`, `started_at`, `ended_at?` | Binds a User to a School with a Role. `school_id` is a FK → `schools.id`. |
 | **Role** | `code`, `name`, `permissions[]` | Enum-driven (see enum below); permissions bound at issue time. |
 | **Guardian** | `user_id`, `relationship`, `linked_students[]` | A User acting as parent/guardian of one or more Students. |
 
@@ -33,7 +76,7 @@ Entities, properties, enums, relationships, and state machines for every domain 
 
 ### Relationships
 
-- `User` 1..* `SchoolMembership` *..1 `School`
+- `User` 1..* `SchoolMembership` *..1 `School` (School owned by the Schools module)
 - `SchoolMembership` *..1 `Role`
 - `Guardian` *..* `Student` (via a join table)
 
@@ -196,8 +239,9 @@ draft → issued ──┬─▶ partially_paid ─▶ paid
 |--------|----------------|-------|
 | **AuditLog** | `school_id`, `actor_user_id`, `action`, `target_type`, `target_id`, `before`, `after`, `at` | Append-only. |
 | **SyncRecord** | `device_id`, `user_id`, `entity_type`, `entity_id`, `op`, `client_timestamp`, `server_timestamp`, `status`, `conflict?` | Mobile sync reconciliation. |
-| **FeatureFlag** | `school_id`, `module_code`, `is_enabled` | Plugin activation per school. |
 | **Attachment** | `owner_type`, `owner_id`, `filename`, `mime`, `size_bytes`, `storage_ref` | Files on local disk; cloud-backup mirror. |
+
+> `FeatureFlag` was previously listed here. It is now owned by the **Schools module** — see Module — Schools above.
 
 ---
 
@@ -205,7 +249,7 @@ draft → issued ──┬─▶ partially_paid ─▶ paid
 
 | Aggregate Root | Children |
 |----------------|----------|
-| School | SchoolMembership, FeatureFlag |
+| School | SchoolMembership (via Users), FeatureFlag, SchoolConfig |
 | User | (global, no children) |
 | Student | Enrolment, AttendanceRecord (through Enrolment) |
 | Course | Lesson, LessonVersion |
