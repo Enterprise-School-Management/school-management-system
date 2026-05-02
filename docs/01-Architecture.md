@@ -86,6 +86,7 @@ Mirrors [docs/spec.md §5](../../docs/spec.md). Each module is a self-contained 
 
 | Module | Responsibilities |
 |--------|------------------|
+| **Schools** | Class, Teachers, Students , 
 | **Users** | Authentication, profiles, roles, permissions |
 | **Courses** | Course catalogue, lessons, content, question banks |
 | **Enrolments** | Student enrolment, class assignment, timetables |
