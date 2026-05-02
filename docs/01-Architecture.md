@@ -86,7 +86,8 @@ Mirrors [docs/spec.md §5](../../docs/spec.md). Each module is a self-contained 
 
 | Module | Responsibilities |
 |--------|------------------|
-| **Users** | Authentication, profiles, roles, permissions |
+| **Schools** | School registration, configuration, timezone, active-module list, billing tier |
+| **Users** | Authentication, profiles, roles, permissions, school memberships |
 | **Courses** | Course catalogue, lessons, content, question banks |
 | **Enrolments** | Student enrolment, class assignment, timetables |
 | **Assessments** | Assignments, quizzes, grading, gradebook, report cards |
@@ -127,6 +128,18 @@ Mirrors [docs/spec.md §2.3](../../docs/spec.md).
 - Cross-tenant queries (superadmin dashboard) go through a separate explicit API; they never leak into regular endpoints.
 - Data isolation is verified by integration tests; see [09-TestingGuide.md](09-TestingGuide.md).
 
+### Superadmin Authentication
+
+Superadmin access is **a role on the same auth system** — not a separate login page or a separate Django site. See [ADR-0001](adr/0001-superadmin-authentication.md) for the full decision record.
+
+Summary:
+
+- The platform operator is a `User` with a `SchoolMembership` where `role = system_designer` (or `security_officer`) and `is_superadmin = True`. The membership's `school_id` references a reserved **platform tenant** (`short_code = __platform__`) created on first install.
+- Login goes through the same `POST /api/v1/auth/login` endpoint used by all other roles.
+- The JWT issued for a superadmin includes `"superadmin": true` in its claims.
+- A dedicated `IsSuperadmin` DRF permission class is applied at the router level to every `/api/v1/super/*` endpoint. Requests without the claim receive `403 Forbidden`.
+- `is_superadmin` is **never writable via the public API** — it can only be set through Django admin or a migration fixture.
+
 ---
 
 ## 8. Offline-First Strategy
@@ -149,6 +162,8 @@ Mirrors [docs/spec.md §4](../../docs/spec.md). Offline-first is the **primary d
 - **Software and security updates** are pulled from the cloud update server when connectivity allows.
 - **Cross-school aggregates** sync to the superadmin dashboard when connectivity allows.
 
+**WatermelonDB sync endpoint (DRF side):** The mobile clients push mutations to and pull server changes from `POST /api/v1/sync/push` and `POST /api/v1/sync/pull`. A third endpoint, `POST /api/v1/sync/resolve`, lets a client submit a human-resolved conflict. These are owned by the **Enrolments** module team in Phase 1 (attendance and student data are the first offline-sync targets) and extended by other modules as they land. See [03-ApiReference.md §10](03-ApiReference.md) for the full sync endpoint specification.
+
 ### 8.3 Conflict Resolution
 
 | Data Type | Strategy |
@@ -156,6 +171,13 @@ Mirrors [docs/spec.md §4](../../docs/spec.md). Offline-first is the **primary d
 | Most data | Last-write-wins |
 | Grade changes | Explicit conflict flagging |
 | Payment records | Explicit conflict flagging |
+
+**Who sees the flag and how they resolve it:**
+
+- When a grade or payment conflict is detected on the server, the record's status transitions to `conflict_flagged` (see state machines in [06-DomainModel.md](06-DomainModel.md)).
+- The `examinations_officer` role sees grade conflicts; the `finance_bursar` role sees payment conflicts. Both are surfaced in an in-app notification and a dedicated "Conflicts" view in the dashboard.
+- The resolver opens the conflict detail screen, which shows the two competing versions side-by-side (device timestamp, user, value). They select one version or enter a corrected value and submit via `POST /api/v1/sync/resolve`. The server transitions the record to `approved` (grades) or `confirmed` (payments) and logs the resolution to the audit log.
+- Unresolved conflicts older than 7 days escalate to the `school_head` role via a daily digest notification.
 
 See [C-Glossary.md](C-Glossary.md) for **Conflict Flag** and **Sync Queue** definitions.
 
@@ -173,14 +195,14 @@ Mirrors [docs/spec.md §3](../../docs/spec.md).
 | **Mobile** | React Native + Expo | Android and iOS; WatermelonDB for offline storage |
 | **Backend** | Django + Django REST Framework | Modular monolith, ASGI-ready |
 | **Database** | PostgreSQL | Local, runs on school server |
-| **Cache** | Redis (self-hosted) | Also used as message broker |
-| **Queue** | Celery + Redis | Async jobs: email, grading, analytics, backups |
+| **Cache** | Redis (self-hosted) | Also used as message broker. Separated by DB index (DB 0 = cache, DB 1 = broker) in Phase 1. See [ADR-0002](adr/0002-redis-cache-and-broker.md). |
+| **Queue** | Celery + Redis | Async jobs: email, grading, analytics, backups. Celery workers run as a **separate service** in the same `docker-compose.yml` as the API (`celery_worker` service, same image). |
 | **Search** | Redis first; OpenSearch/Elasticsearch if performance demands it | MongoDB only if a real document use case appears |
 | **Auth** | Django Auth + JWT | No cloud SSO required for local deployment |
 | **File Storage** | Local filesystem | Cloud backup when connectivity available |
 | **Containerisation** | Docker + Docker Compose | Consistent deployment on any school server hardware |
 | **CI/CD** | GitHub Actions + Docker | Lint, SAST, dependency scan, image build, deploy |
-| **Vector DB** | pgvector first; Pinecone or Weaviate if scale demands | For AI/RAG features |
+| **Vector DB** | pgvector first; Pinecone or Weaviate if scale demands | For AI/RAG features. Move to a dedicated vector store when **any** of: (a) vector index size exceeds 10 M embeddings, (b) pgvector query latency p95 > 200 ms, or (c) AI inference module is extracted to a microservice. |
 | **UI Components** | shadcn/ui | Component library |
 | **Styling** | Tailwind CSS | Default with shadcn |
 | **Mobile Offline** | WatermelonDB | Local storage and sync queue on device |
@@ -208,8 +230,26 @@ Mirrors [docs/spec.md §2.4](../../docs/spec.md). Extract to separate services o
 
 The clean module boundaries in §5 make each extraction a code-movement exercise, not a redesign.
 
+### Interface stubs — what to define now
+
+No microservice needs to be built now. However, to avoid a painful extraction later, two interface boundaries should be defined before the relevant module ships:
+
+| Module | Stub to define now | Reason |
+|--------|--------------------|--------|
+| **Notifications** | An abstract `NotificationBackend` port (send method signature, payload contract) | Notification delivery is the highest-probability extraction candidate. Abstracting the delivery backend today means swapping Celery in-process delivery for a separate notification service later requires only a new adapter, not refactoring every call site. |
+| **AI / Analytics** | An abstract `InferenceBackend` port (predict method signature, model-name contract) | AI inference load is unpredictable. An interface means the same domain code works whether the model runs in-process (Phase 1) or behind an HTTP call to a separate service (later). |
+
+Full-text search and video processing have no implementation in Phase 1, so no stub is needed yet. Define their interfaces when the feature design starts.
+
 ---
 
 ## 11. Architectural Decision Records (ADRs)
 
-ADRs live under `docs/adr/` (**Not yet implemented** — directory to be created when the first architectural decision needs recording). Each ADR captures context, decision, consequences, and status. Reference ADRs by number from [02-ChangeLog.md](02-ChangeLog.md) when a decision lands.
+ADRs live under [`docs/adr/`](adr/README.md). Each ADR captures context, decision, consequences, and status. Reference ADRs by number from [02-ChangeLog.md](02-ChangeLog.md) when a decision lands.
+
+| ADR | Title | Status |
+|-----|-------|--------|
+| [ADR-0001](adr/0001-superadmin-authentication.md) | Superadmin Authentication Strategy | Accepted |
+| [ADR-0002](adr/0002-redis-cache-and-broker.md) | Redis Dual-Use: Cache and Message Broker | Accepted |
+
+To record a new architectural decision, copy [`docs/adr/0000-template.md`](adr/0000-template.md) to a new numbered file, fill in all sections, and open a PR for review.
