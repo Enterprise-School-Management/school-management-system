@@ -34,7 +34,7 @@ Mirrors [docs/spec.md §1 — Core Principles](../../docs/spec.md).
 |           JWT auth · tenant scoping · versioning          |
 +-----------------------------------------------------------+
 |                    Domain Modules                         |
-|   Users · Courses · Enrolments · Assessments ·            |
+|   Schools · Users · Courses · Enrolments · Assessments ·  |
 |   Billing · Analytics · Notifications                     |
 |            (DDD + Hexagonal per module)                   |
 +-----------------------------------------------------------+
@@ -86,7 +86,8 @@ Mirrors [docs/spec.md §5](../../docs/spec.md). Each module is a self-contained 
 
 | Module | Responsibilities |
 |--------|------------------|
-| **Users** | Authentication, profiles, roles, permissions |
+| **Schools** | School entity lifecycle, tenant registration, module activation flags, TenantContext resolution |
+| **Users** | Authentication, profiles, roles, permissions, school membership |
 | **Courses** | Course catalogue, lessons, content, question banks |
 | **Enrolments** | Student enrolment, class assignment, timetables |
 | **Assessments** | Assignments, quizzes, grading, gradebook, report cards |
@@ -95,6 +96,37 @@ Mirrors [docs/spec.md §5](../../docs/spec.md). Each module is a self-contained 
 | **Notifications** | In-app, email, SMS, push; delivered via Celery queue |
 
 > This list is the canonical module set. It must match the module headings in [06-DomainModel.md](06-DomainModel.md) and the endpoint groups in [03-ApiReference.md](03-ApiReference.md).
+
+### 5.1 Cross-Module Dependency Map
+
+Schools is the **foundational module**. Every other module depends on it; Schools depends on nothing else.
+
+```
+Schools ──────────────────────────────────────────────────────────────────▶ (no dependencies)
+   │
+   │  school_id FK (row-level scoping)
+   ├──▶ Users          (school membership, role assignment)
+   ├──▶ Courses        (course catalogue scoped per school)
+   ├──▶ Enrolments     (students, classes, timetables)
+   ├──▶ Assessments    (assignments, grading)
+   ├──▶ Billing        (fee heads, invoices, subscription tier)
+   ├──▶ Analytics      (engagement scores, risk flags)
+   └──▶ Notifications  (templates, delivery)
+```
+
+**Event-driven cross-module subscriptions** (Schools → other modules):
+
+| Event | Subscribers | Reaction |
+|-------|-------------|----------|
+| `school.created` | Users | Seed default roles and superadmin membership |
+| `school.created` | Notifications | Send welcome notification to registering admin |
+| `school.activated` | All modules | Enable row-level access for the school's `school_id` |
+| `school.deactivated` | All modules | Suspend access; queue data-export job |
+| `school.module_toggled` | Billing | Recalculate subscription cost |
+| `school.module_toggled` | Users | Recompute permission sets for affected roles |
+| `school.subscription_changed` | Billing | Adjust active invoicing plan |
+
+All inter-module communication follows rule 3 in §6 — **events only, no direct service calls**.
 
 ---
 
@@ -120,12 +152,37 @@ Mirrors [docs/spec.md §2.3](../../docs/spec.md).
 - A **superadmin dashboard** monitors all schools from a single installation.
 - Cross-school aggregates sync to the superadmin when internet is available.
 
-### Enforcement
+### 7.1 Enforcement
 
 - A request-scoped `TenantContext` resolves `school_id` from the authenticated user's claims before any query runs.
 - Base querysets are wrapped in a tenant-aware manager that injects `school_id` filters automatically.
 - Cross-tenant queries (superadmin dashboard) go through a separate explicit API; they never leak into regular endpoints.
 - Data isolation is verified by integration tests; see [09-TestingGuide.md](09-TestingGuide.md).
+
+### 7.2 TenantContext Resolution Strategy
+
+`TenantContext` is owned by the **Schools module** (`schools.middleware.TenantContextMiddleware`). It runs as the first middleware after authentication and populates `request.tenant_context` (a `TenantContext` object carrying `school_id`, `school`, and `is_superadmin`) before any view or service executes.
+
+**Resolution priority (first match wins):**
+
+| Priority | Source | Example |
+|----------|--------|---------|
+| 1 | JWT claim `school_id` | `{ "sub": "user-uuid", "school_id": "sch-uuid" }` |
+| 2 | Request header `X-School-ID` | Service-to-service and CLI clients |
+| 3 | Subdomain | `springfield.sms.example.com` → looks up `short_code = "springfield"` |
+
+**Validation rules applied after resolution:**
+
+1. The resolved `school_id` must exist in the `schools` table.
+2. The school's `is_active` flag must be `true`; inactive schools receive HTTP 403.
+3. The authenticated user must have an active `SchoolMembership` for that school, unless the request is from a superadmin.
+4. Superadmin requests bypass school-scoping entirely and use a dedicated API path (`/superadmin/…`).
+
+**Failure handling:**
+
+- No resolvable school → HTTP 400 `tenant_missing`.
+- School found but inactive → HTTP 403 `tenant_inactive`.
+- User not a member of the resolved school → HTTP 403 `tenant_access_denied`.
 
 ---
 

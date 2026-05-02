@@ -151,6 +151,7 @@ The system is organised around the following core domains using DDD + Hexagonal 
 
 | Domain | Responsibilities |
 |---|---|
+| **Schools** | School entity lifecycle, tenant registration, module activation flags, TenantContext resolution |
 | **Users** | Authentication, profiles, roles, permissions |
 | **Courses** | Course catalogue, lessons, content, question banks |
 | **Enrolments** | Student enrolment, class assignment, timetables |
