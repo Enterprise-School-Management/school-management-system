@@ -15,15 +15,35 @@ Entities, properties, enums, relationships, and state machines for every domain 
 
 ---
 
+## Module — Schools
+
+### Entities
+
+| Entity | Key Properties | Notes |
+|--------|----------------|-------|
+| **School** *(root)* | `name`, `short_code`, `address`, `timezone`, `active_modules[]`, `billing_tier` | Top-level tenant. Does not carry `school_id`. `short_code = __platform__` is reserved for the superadmin platform tenant. |
+| **FeatureFlag** | `school_id`, `module_code`, `is_enabled` | Plugin activation per school. Managed here and mirrored in cross-cutting entities. |
+
+### Enums
+
+- `BillingTier`: `starter`, `standard`, `premium`.
+- `ModuleCode`: matches the module list in [01-Architecture.md §5](01-Architecture.md).
+
+### Relationships
+
+- `School` 1..* `FeatureFlag`
+- `School` 1..* `SchoolMembership` (owned by Users module)
+
+---
+
 ## Module — Users
 
 ### Entities
 
 | Entity | Key Properties | Notes |
 |--------|----------------|-------|
-| **School** *(root)* | `name`, `short_code`, `address`, `timezone`, `active_modules[]` | Top-level tenant. Does not carry `school_id`. |
 | **User** *(root)* | `email`, `password_hash`, `full_name`, `phone`, `is_active`, `last_login_at` | Global identity. A user may belong to multiple schools via SchoolMembership. |
-| **SchoolMembership** | `user_id`, `school_id`, `role`, `started_at`, `ended_at?` | Binds a User to a School with a Role. |
+| **SchoolMembership** | `user_id`, `school_id`, `role`, `is_superadmin`, `started_at`, `ended_at?` | Binds a User to a School with a Role. `is_superadmin` is only ever set via Django admin or migration fixture — never via the public API. See [ADR-0001](adr/0001-superadmin-authentication.md). |
 | **Role** | `code`, `name`, `permissions[]` | Enum-driven (see enum below); permissions bound at issue time. |
 | **Guardian** | `user_id`, `relationship`, `linked_students[]` | A User acting as parent/guardian of one or more Students. |
 
@@ -196,8 +216,9 @@ draft → issued ──┬─▶ partially_paid ─▶ paid
 |--------|----------------|-------|
 | **AuditLog** | `school_id`, `actor_user_id`, `action`, `target_type`, `target_id`, `before`, `after`, `at` | Append-only. |
 | **SyncRecord** | `device_id`, `user_id`, `entity_type`, `entity_id`, `op`, `client_timestamp`, `server_timestamp`, `status`, `conflict?` | Mobile sync reconciliation. |
-| **FeatureFlag** | `school_id`, `module_code`, `is_enabled` | Plugin activation per school. |
 | **Attachment** | `owner_type`, `owner_id`, `filename`, `mime`, `size_bytes`, `storage_ref` | Files on local disk; cloud-backup mirror. |
+
+> `FeatureFlag` has been moved to the Schools module as it is owned and lifecycle-managed by that module.
 
 ---
 
